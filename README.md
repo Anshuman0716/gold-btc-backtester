@@ -72,6 +72,15 @@ streamlit run app.py
 
 Open **http://localhost:8501** in your browser.
 
+### Run the Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite is fully offline (uses the committed parquet fixtures).
+
 ### Run Checkpoint Scripts
 
 > Note: these are manual validation scripts that require a live internet connection (yfinance).
@@ -102,7 +111,7 @@ python -m checkpoints.checkpoint_phase5   # Logging
 
 - **Phase 0 — Credibility fixes:** fix Supertrend seeding, RSI warm-up, add a `LICENSE` file, replace static sample numbers with a reproducible fixed-date backtest _(done)_.
 - **Phase 1 — Honest backtester:** transaction-cost model, corrected Sharpe/Sortino methodology, resettable kill-switch, leverage/cash guard, richer audit log (risk + cost params).
-- **Phase 2 — Engineering hardening:** offline `pytest` suite, GitHub Actions CI, pinned dependencies, inclusive end-date handling.
+- **Phase 2 — Engineering hardening:** offline `pytest` suite (47 tests, no network), GitHub Actions CI (tests + benchmark-reproducibility check), pinned dependencies, inclusive end-date handling _(done)_.
 - **Phase 3 — Extensibility:** add Donchian Breakout, Time-Series Momentum, and Bollinger/RSI Mean-Reversion strategies; add walk-forward / out-of-sample evaluation.
 
 ## Sample Results

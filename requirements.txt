@@ -1,6 +1,7 @@
-yfinance>=0.2.31
-pandas>=2.0.0
-numpy>=1.24.0
-plotly>=5.18.0
-streamlit>=1.28.0
-pyarrow>=14.0.0
+# Pinned to the versions the test suite and benchmark were verified against.
+yfinance==0.2.65
+pandas==2.3.2
+numpy==2.2.6
+plotly==6.8.0
+streamlit==1.58.0
+pyarrow==23.0.1

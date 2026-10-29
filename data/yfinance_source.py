@@ -6,7 +6,7 @@ Validates interval/date range before making API calls to fail fast
 with clear error messages.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -78,7 +78,9 @@ class YFinanceSource(DataSource):
             df = ticker.history(
                 interval=interval,
                 start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
+                # yfinance's `end` is exclusive; add a day so the docstring's
+                # "end (inclusive)" holds and the last requested bar is returned.
+                end=(end + timedelta(days=1)).strftime("%Y-%m-%d"),
                 auto_adjust=True,
                 actions=False,
             )
