@@ -16,24 +16,27 @@ A multi-timeframe quantitative backtesting platform for **Gold (GC=F)** and **Bi
 
 - **Multi-Timeframe Support**: 1m, 5m, 15m, 30m, 1h, 1d with automatic yfinance lookback-limit enforcement
 - **8 Hand-Rolled Indicators**: EMA, Supertrend, ADX, RSI, MACD, Bollinger Bands, ATR, VWAP — implemented from first principles (no pandas-ta)
-- **Strategy Engine**: EMA Crossover, extensible via an abstract `Strategy` interface
-- **Risk Management**: ATR-based position sizing, stop-loss, take-profit, and a max-drawdown kill-switch
+- **Strategy Engine**: four strategies — EMA Crossover, Donchian Breakout, Time-Series Momentum, Bollinger/RSI Mean-Reversion — behind an abstract `Strategy` interface
+- **Risk Management**: ATR position sizing, stop-loss/take-profit, transaction costs (commission + slippage), a leverage cap, and a resettable max-drawdown kill-switch
 - **Fill-at-Next-Open Rule**: signals on bar N execute at bar N+1's open (verified: no look-ahead on entries)
-- **Analytics**: Sharpe, Sortino, Calmar, max drawdown + duration, win rate, profit factor, avg trade return
-- **Audit Logging**: SQLite records every backtest run
+- **Analytics**: Sharpe, Sortino, Calmar (risk-adjusted ratios on active bars), max drawdown + duration, win rate, profit factor, avg trade return
+- **Audit Logging**: SQLite records every run with its metrics, risk/cost parameters, and a data fingerprint — reproducible from the row
 - **Parquet Caching**: transparent data caching via a decorator pattern
 - **Dark-Themed Dashboard**: Streamlit UI with candlestick charts, indicator overlays, equity curves, and trade markers
 
 ## Known limitations (as of 2026-10-29)
 
-These are tracked and scheduled in `claude/implementation-plan.md`:
+Tracked in `claude/implementation-plan.md`. Most Phase 0/1/2 gaps are now closed
+(costs, active-bar ratios, resettable kill-switch, reproducible audit log, offline tests/CI).
+Remaining:
 
-- **No transaction costs.** Commissions and slippage are not modeled, so reported returns are optimistic.
-- **Sharpe/Sortino** are computed over every bar including flat, out-of-market bars, which distorts the ratios.
-- **Max-drawdown kill-switch is permanent** — it does not re-enable after equity recovers.
-- **Audit log does not store risk or cost parameters**, so a logged run is not yet fully reproducible from the DB alone.
-- **Single strategy** shipped (EMA Crossover). Three additional strategies are planned.
-- **Tests require a live network** (yfinance); there is no offline/CI test suite yet.
+- **In-sample only.** Results are single-window backtests. Walk-forward / out-of-sample
+  evaluation is the next priority and is not implemented yet.
+- **Benchmark table is cost-free.** `scripts/benchmark.py` does not yet apply the cost model,
+  so those specific numbers are optimistic (the engine itself does model costs when enabled).
+- **Mean-reversion has no flat state.** It reverses at the opposite extreme or exits via
+  stop-loss/take-profit — a consequence of the engine's BUY/SELL/HOLD model.
+- **Daily VWAP equals the bar's typical price** (VWAP is meaningful intraday only).
 
 ## Architecture
 
@@ -42,7 +45,7 @@ app.py (Streamlit Dashboard)
   |
   +-- data/           DataSource ABC -> YFinanceSource -> CachedDataSource
   +-- indicators/     Trend | Momentum | Volatility | Volume (8 indicators)
-  +-- strategy/       Strategy ABC -> EMACrossover
+  +-- strategy/       Strategy ABC -> EMA, Donchian, Momentum, MeanReversion
   +-- risk/           ATR Position Sizing + SL/TP/Kill-Switch + Fill-at-Next-Open
   +-- analytics/      TearsheetResult (10 metrics, bar-count annualization)
   +-- logging_/       SQLite audit trail (backtest_runs table)
@@ -110,9 +113,9 @@ python -m checkpoints.checkpoint_phase5   # Logging
 ## Roadmap
 
 - **Phase 0 — Credibility fixes:** fix Supertrend seeding, RSI warm-up, add a `LICENSE` file, replace static sample numbers with a reproducible fixed-date backtest _(done)_.
-- **Phase 1 — Honest backtester:** transaction-cost model, corrected Sharpe/Sortino methodology, resettable kill-switch, leverage/cash guard, richer audit log (risk + cost params).
+- **Phase 1 — Honest backtester:** transaction-cost model, active-bar Sharpe/Sortino, resettable kill-switch, leverage/cash guard, richer audit log (risk + cost params) _(done)_.
 - **Phase 2 — Engineering hardening:** offline `pytest` suite (47 tests, no network), GitHub Actions CI (tests + benchmark-reproducibility check), pinned dependencies, inclusive end-date handling _(done)_.
-- **Phase 3 — Extensibility:** add Donchian Breakout, Time-Series Momentum, and Bollinger/RSI Mean-Reversion strategies; add walk-forward / out-of-sample evaluation.
+- **Phase 3 — Extensibility:** Donchian Breakout, Time-Series Momentum, and Bollinger/RSI Mean-Reversion strategies _(done)_; walk-forward / out-of-sample evaluation _(next)_.
 
 ## Sample Results
 
