@@ -26,3 +26,18 @@ def test_signals_have_no_lookahead(btc):
 
 def test_params_round_trip():
     assert EMACrossover(5, 15).get_params() == {"fast_period": 5, "slow_period": 15}
+
+
+from strategy import STRATEGY_REGISTRY
+
+
+@pytest.mark.parametrize("name", sorted(STRATEGY_REGISTRY))
+def test_registry_strategy_emits_valid_signals(name, btc):
+    spec = STRATEGY_REGISTRY[name]
+    kwargs = {k: v["default"] for k, v in spec["params"].items()}
+    strat = spec["class"](**kwargs)
+    sig = strat.generate_signals(btc)
+    assert set(sig.unique()).issubset({"BUY", "SELL", "HOLD"})
+    assert len(sig) == len(btc)
+    assert strat.get_params() == kwargs
+    assert strat.name == name

@@ -33,7 +33,7 @@ from indicators.momentum import rsi, macd
 from indicators.volatility import bollinger_bands, atr
 from indicators.volume import vwap
 from indicators.registry import INDICATOR_REGISTRY, INDICATOR_FUNCTIONS, INDICATOR_PARAMS
-from strategy.ema_crossover import EMACrossover
+from strategy import STRATEGY_REGISTRY
 from risk.controls import apply_risk_controls, RiskParams
 from analytics.tearsheet import compute_tearsheet
 from logging_.recorder import record_run, get_all_runs
@@ -566,18 +566,26 @@ with st.sidebar:
     st.markdown("### 4. Strategy")
     strategy_name = st.selectbox(
         "Strategy",
-        options=["EMA Crossover"],
+        options=list(STRATEGY_REGISTRY.keys()),
         label_visibility="collapsed",
     )
 
-    col_f, col_sl = st.columns(2)
-    with col_f:
-        fast_period = st.number_input("Fast EMA", min_value=2, max_value=50, value=9, step=1)
-    with col_sl:
-        slow_period = st.number_input("Slow EMA", min_value=5, max_value=200, value=21, step=1)
-
-    if fast_period >= slow_period:
-        st.error("Fast period must be less than slow period.")
+    strategy_kwargs = {}
+    _spec = STRATEGY_REGISTRY[strategy_name]["params"]
+    _keys = list(_spec.keys())
+    for _i in range(0, len(_keys), 2):
+        _cols = st.columns(2)
+        for _col, _k in zip(_cols, _keys[_i:_i + 2]):
+            _p = _spec[_k]
+            with _col:
+                if _p.get("type") == "int":
+                    strategy_kwargs[_k] = int(st.number_input(
+                        _p["label"], min_value=int(_p["min"]), max_value=int(_p["max"]),
+                        value=int(_p["default"]), step=int(_p["step"]), key=f"strat_{_k}"))
+                else:
+                    strategy_kwargs[_k] = float(st.slider(
+                        _p["label"], float(_p["min"]), float(_p["max"]),
+                        float(_p["default"]), float(_p["step"]), key=f"strat_{_k}"))
 
     # --- Risk Management ---
     st.markdown("### 5. Risk Controls")
@@ -636,8 +644,10 @@ st.markdown('<p class="subtitle">Multi-timeframe quantitative backtesting with i
 
 # --- Run Backtest ---
 if run_backtest:
-    if fast_period >= slow_period:
-        st.error("Fast EMA period must be less than Slow EMA period. Adjust in the sidebar.")
+    try:
+        strategy = STRATEGY_REGISTRY[strategy_name]["class"](**strategy_kwargs)
+    except ValueError as e:
+        st.error(f"Invalid strategy parameters: {e}")
         st.stop()
 
     # Convert dates to datetime
@@ -667,7 +677,6 @@ if run_backtest:
 
     # --- Generate Signals ---
     with st.spinner("Running strategy..."):
-        strategy = EMACrossover(fast_period=fast_period, slow_period=slow_period)
         signals = strategy.generate_signals(df)
 
     # --- Apply Risk Controls ---

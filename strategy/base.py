@@ -66,6 +66,21 @@ class Strategy(ABC):
         """
         pass
 
+    def _edge_signals(self, state: pd.Series) -> pd.Series:
+        """Convert a +1/-1 regime series into edge-triggered BUY/SELL/HOLD.
+
+        The engine opens/flips on BUY/SELL and ignores repeats, so a strategy
+        emits a signal only when the regime CHANGES. NaN entries carry the prior
+        regime forward (ffill); the first bar is always HOLD.
+        """
+        state = state.ffill()
+        prev = state.shift(1)
+        signals = pd.Series("HOLD", index=state.index)
+        signals[(state == 1) & (prev != 1)] = "BUY"
+        signals[(state == -1) & (prev != -1)] = "SELL"
+        signals.iloc[0] = "HOLD"
+        return self._validate_signals(signals)
+
     def _validate_signals(self, signals: pd.Series) -> pd.Series:
         """Validate that all signal values are in {BUY, SELL, HOLD}.
 
