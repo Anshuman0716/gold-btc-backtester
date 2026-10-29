@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
+from analytics.tearsheet import format_ratio
 from analytics.walkforward import walk_forward
 from risk.controls import RiskParams
 from strategy import STRATEGY_REGISTRY
@@ -68,7 +69,7 @@ def run() -> str:
                              train_bars=TRAIN_BARS, test_bars=TEST_BARS)
             rows.append(
                 f"| {symbol} | {name} | {len(r.folds)} | {r.is_mean_sharpe:+.2f} "
-                f"| {r.oos_sharpe:+.2f} | {r.overfit_gap:+.2f} | {r.oos_return * 100:+.2f}% "
+                f"| {format_ratio(r.oos_sharpe)} | {r.overfit_gap:+.2f} | {r.oos_return * 100:+.2f}% "
                 f"| {r.oos.max_drawdown * 100:.2f}% | {r.oos.num_trades} |"
             )
     lines = [

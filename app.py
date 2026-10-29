@@ -35,7 +35,7 @@ from indicators.volume import vwap
 from indicators.registry import INDICATOR_REGISTRY, INDICATOR_FUNCTIONS, INDICATOR_PARAMS
 from strategy import STRATEGY_REGISTRY
 from risk.controls import apply_risk_controls, RiskParams
-from analytics.tearsheet import compute_tearsheet
+from analytics.tearsheet import compute_tearsheet, format_ratio
 from logging_.recorder import record_run, get_all_runs
 
 
@@ -776,7 +776,7 @@ if "tearsheet" in st.session_state:
     with col5:
         st.markdown(create_metric_card(
             "Profit Factor",
-            f"{tearsheet.profit_factor:.2f}",
+            format_ratio(tearsheet.profit_factor),
             tearsheet.profit_factor > 1,
         ), unsafe_allow_html=True)
 
@@ -785,13 +785,13 @@ if "tearsheet" in st.session_state:
 
     with col6:
         st.markdown(create_metric_card(
-            "Sortino Ratio", f"{tearsheet.sortino_ratio:.2f}",
+            "Sortino Ratio", format_ratio(tearsheet.sortino_ratio),
             tearsheet.sortino_ratio > 1,
         ), unsafe_allow_html=True)
 
     with col7:
         st.markdown(create_metric_card(
-            "Calmar Ratio", f"{tearsheet.calmar_ratio:.2f}",
+            "Calmar Ratio", format_ratio(tearsheet.calmar_ratio),
             tearsheet.calmar_ratio > 1,
         ), unsafe_allow_html=True)
 

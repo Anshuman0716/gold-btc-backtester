@@ -24,9 +24,12 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
-from analytics.tearsheet import compute_tearsheet
+from analytics.tearsheet import compute_tearsheet, format_ratio
 from risk.controls import RiskParams, apply_risk_controls
 from strategy.ema_crossover import EMACrossover
+from strategy.donchian import DonchianBreakout
+from strategy.momentum import TimeSeriesMomentum
+from strategy.mean_reversion import BollingerMeanReversion
 
 # --- Pinned configuration (change these and the results change) ---
 START = "2022-01-01"
@@ -36,6 +39,9 @@ SYMBOLS = ["BTC-USD", "GC=F"]
 STRATEGIES = [
     EMACrossover(fast_period=9, slow_period=21),
     EMACrossover(fast_period=20, slow_period=50),
+    DonchianBreakout(channel_period=20),
+    TimeSeriesMomentum(lookback=50),
+    BollingerMeanReversion(),
 ]
 RISK = RiskParams(
     initial_capital=100_000,
@@ -44,6 +50,8 @@ RISK = RiskParams(
     stop_loss_atr=2.0,
     take_profit_atr=3.0,
     max_drawdown_pct=0.20,
+    commission_bps=10,
+    slippage_bps=5,
 )
 
 FIXTURE_DIR = ROOT / "tests" / "fixtures"
@@ -113,9 +121,9 @@ def run() -> str:
             rows.append(
                 f"| {symbol} | {strat.name} ({params}) "
                 f"| {ts.total_return * 100:.2f}% | {buy_hold * 100:.2f}% "
-                f"| {ts.sharpe_ratio:.2f} | {ts.sortino_ratio:.2f} "
+                f"| {format_ratio(ts.sharpe_ratio)} | {format_ratio(ts.sortino_ratio)} "
                 f"| {ts.max_drawdown * 100:.2f}% | {ts.win_rate * 100:.1f}% "
-                f"| {ts.profit_factor:.2f} | {ts.num_trades} |"
+                f"| {format_ratio(ts.profit_factor)} | {ts.num_trades} |"
             )
 
     lines = [
@@ -124,8 +132,9 @@ def run() -> str:
         "",
         f"Risk: capital ${RISK.initial_capital:,.0f}, risk/trade {RISK.risk_per_trade:.0%}, "
         f"ATR({RISK.atr_period}) SL {RISK.stop_loss_atr}x / TP {RISK.take_profit_atr}x, "
-        f"kill-switch at {RISK.max_drawdown_pct:.0%} drawdown. "
-        "**No commissions or slippage are modeled yet**, so returns are optimistic.",
+        f"kill-switch at {RISK.max_drawdown_pct:.0%} drawdown, "
+        f"costs {RISK.commission_bps:.0f} bps commission + {RISK.slippage_bps:.0f} bps slippage per side. "
+        "Results are in-sample single-window backtests; see `results/walkforward.md` for out-of-sample.",
         "",
         "| Asset | Strategy | Return | Buy & Hold | Sharpe | Sortino | Max DD | Win Rate | Profit Factor | Trades |",
         "|---|---|---|---|---|---|---|---|---|---|",

@@ -79,6 +79,11 @@ def get_annualization_factor(asset: str, interval: str) -> float:
 _RATIO_CAP = 1e6
 
 
+def format_ratio(x: float) -> str:
+    """Human display for a ratio: 'n/a' when it hit the finite sentinel (no-loss / no-downside)."""
+    return "n/a" if abs(x) >= _RATIO_CAP else f"{x:.2f}"
+
+
 def _finite(x: float, cap: float = _RATIO_CAP) -> float:
     """Clamp NaN->0 and +/-inf (or overflow) to +/-cap."""
     if x != x:            # NaN
@@ -116,13 +121,13 @@ class TearsheetResult:
         """
         return {
             "Total Return": f"{self.total_return * 100:.2f}%",
-            "Sharpe Ratio": f"{self.sharpe_ratio:.2f}",
-            "Sortino Ratio": f"{self.sortino_ratio:.2f}",
-            "Calmar Ratio": f"{self.calmar_ratio:.2f}",
+            "Sharpe Ratio": format_ratio(self.sharpe_ratio),
+            "Sortino Ratio": format_ratio(self.sortino_ratio),
+            "Calmar Ratio": format_ratio(self.calmar_ratio),
             "Max Drawdown": f"{self.max_drawdown * 100:.2f}%",
             "Max DD Duration": f"{self.max_drawdown_duration} bars",
             "Win Rate": f"{self.win_rate * 100:.1f}%",
-            "Profit Factor": f"{self.profit_factor:.2f}",
+            "Profit Factor": format_ratio(self.profit_factor),
             "Avg Trade Return": f"{self.avg_trade_return * 100:.2f}%",
             "Num Trades": self.num_trades,
         }
