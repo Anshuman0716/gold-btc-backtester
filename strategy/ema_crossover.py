@@ -68,7 +68,7 @@ class EMACrossover(Strategy):
         # Relative position: fast > slow
         fast_above = fast_ema > slow_ema
         # Previous bar's relative position (fill NaN from shift with False)
-        prev_fast_above = fast_above.shift(1).fillna(False).astype(bool)
+        prev_fast_above = fast_above.shift(1, fill_value=False).astype(bool)
 
         # Initialize all signals as HOLD
         signals = pd.Series("HOLD", index=df.index)

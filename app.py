@@ -588,6 +588,11 @@ with st.sidebar:
     stop_loss_atr = st.slider("Stop-Loss (ATR x)", 0.5, 5.0, 2.0, 0.5)
     take_profit_atr = st.slider("Take-Profit (ATR x)", 0.5, 10.0, 3.0, 0.5)
     max_dd_pct = st.slider("Max Drawdown Kill (%)", 5, 50, 20, 5) / 100
+    commission_bps = st.slider("Commission (bps/side)", 0.0, 50.0, 10.0, 1.0)
+    slippage_bps = st.slider("Slippage (bps/side)", 0.0, 50.0, 5.0, 1.0)
+    max_leverage = st.slider("Max Leverage (x)", 1.0, 10.0, 1.0, 0.5)
+    kill_switch_mode = st.selectbox("Kill-Switch Mode", ["latch", "reset"], index=0,
+        help="latch = halt trading permanently once max drawdown is hit; reset = resume after a cooldown.")
 
     # --- Indicators ---
     st.markdown("### 6. Chart Indicators")
@@ -674,6 +679,10 @@ if run_backtest:
             stop_loss_atr=stop_loss_atr,
             take_profit_atr=take_profit_atr,
             max_drawdown_pct=max_dd_pct,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            max_leverage=max_leverage,
+            kill_switch_mode=kill_switch_mode,
         )
         trades, equity_curve = apply_risk_controls(signals, df, risk_params)
 
@@ -813,6 +822,7 @@ if "tearsheet" in st.session_state:
                 "Exit Price": f"${t.exit_price:,.2f}",
                 "Size": f"{t.position_size:.4f}",
                 "P&L": f"${t.pnl:,.2f}",
+                "Fee": f"${t.fee:,.2f}",
                 "Return": f"{t.pnl_pct * 100:+.2f}%",
                 "Exit Reason": t.exit_reason.replace("_", " ").title(),
             })

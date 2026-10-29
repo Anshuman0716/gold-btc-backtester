@@ -1,21 +1,20 @@
 """
 Risk controls -- stop-loss, take-profit, max drawdown kill-switch,
-and fill-at-next-open order execution.
+transaction costs, leverage cap, and fill-at-next-open order execution.
 
 This module is the bridge between raw strategy signals and executable orders.
 It enforces:
     1. Fill-at-next-open: signals on bar N execute at bar N+1's open price.
-       This is the #1 defense against lookahead bias.
-    2. Stop-loss: exit if price moves against the position by a threshold.
-    3. Take-profit: exit if price moves in favor by a threshold.
-    4. Max drawdown kill-switch: block all new trades if portfolio drawdown
-       exceeds a configurable limit (e.g. 20%).
+    2. Transaction costs: commission (bps) + slippage (bps) applied on both
+       entry and exit fills. PnL is reported NET of costs.
+    3. Stop-loss / take-profit, with a pessimistic same-bar assumption.
+    4. Leverage cap: position notional is capped at max_leverage * capital.
+    5. Max drawdown kill-switch (latch or cooldown-reset).
 
-The output is a list of Trade objects representing completed round-trip trades
-(entry + exit), which feeds directly into the analytics tearsheet.
+The output is a list of Trade objects (net of costs) plus the equity curve.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -28,38 +27,37 @@ from indicators.volatility import atr as compute_atr
 
 @dataclass
 class RiskParams:
-    """Configurable risk management parameters.
-
-    All thresholds are expressed as ATR multiples by default.
-    Set use_pct=True to interpret stop_loss and take_profit as
-    fixed percentages instead.
-    """
+    """Configurable risk management parameters."""
     initial_capital: float = 100_000.0
-    risk_per_trade: float = 0.01          # 1% of account per trade
+    risk_per_trade: float = 0.01
     atr_period: int = 14
-    atr_multiplier: float = 2.0           # For position sizing stop distance
-    stop_loss_atr: float = 2.0            # Stop-loss at 2x ATR from entry
-    take_profit_atr: float = 3.0          # Take-profit at 3x ATR from entry
-    max_drawdown_pct: float = 0.20        # Kill-switch at 20% drawdown
-    use_pct: bool = False                 # If True, SL/TP are fixed %
-    stop_loss_pct: float = 0.02           # 2% stop-loss (when use_pct=True)
-    take_profit_pct: float = 0.03         # 3% take-profit (when use_pct=True)
+    atr_multiplier: float = 2.0
+    stop_loss_atr: float = 2.0
+    take_profit_atr: float = 3.0
+    max_drawdown_pct: float = 0.20
+    use_pct: bool = False
+    stop_loss_pct: float = 0.02
+    take_profit_pct: float = 0.03
+    # --- Phase 1 additions ---
+    commission_bps: float = 0.0          # per-side commission, basis points of notional
+    slippage_bps: float = 0.0            # per-side slippage, basis points of fill price
+    max_leverage: float = 1.0            # cap: notional <= max_leverage * capital
+    pessimistic_fills: bool = True       # if both SL & TP touched same bar, assume SL
+    kill_switch_mode: str = "latch"      # "latch" (permanent) or "reset" (cooldown)
+    kill_switch_cooldown_bars: int = 20  # bars to wait before resuming (reset mode)
 
 
 @dataclass
 class Order:
-    """Represents a pending order to be filled at the next bar's open."""
-    signal_time: datetime                 # When the signal was generated
+    """A pending order to be filled at the next bar's open."""
+    signal_time: datetime
     side: str                             # "BUY" or "SELL"
-    signal_price: float                   # Close price when signal was generated
+    signal_price: float
 
 
 @dataclass
 class Trade:
-    """A completed round-trip trade (entry + exit).
-
-    This is the atomic unit that feeds into the analytics tearsheet.
-    """
+    """A completed round-trip trade (entry + exit), net of costs."""
     entry_time: datetime
     exit_time: datetime
     side: str                             # "LONG" or "SHORT"
@@ -68,9 +66,21 @@ class Trade:
     position_size: float
     stop_loss: float
     take_profit: float
-    pnl: float = 0.0                      # Dollar P&L
-    pnl_pct: float = 0.0                  # Percentage return
-    exit_reason: str = ""                 # "signal", "stop_loss", "take_profit", "kill_switch"
+    pnl: float = 0.0                      # Dollar P&L, NET of fees
+    pnl_pct: float = 0.0                  # Net return on notional
+    fee: float = 0.0                      # Total commission+slippage cost in dollars
+    exit_reason: str = ""
+
+
+def _apply_slippage(price: float, action: str, slip: float) -> float:
+    """Adjust a fill price against the trader by `slip` (fraction).
+
+    action 'buy'  -> pay up (price * (1+slip))
+    action 'sell' -> receive less (price * (1-slip))
+    """
+    if action == "buy":
+        return price * (1.0 + slip)
+    return price * (1.0 - slip)
 
 
 def apply_risk_controls(
@@ -78,39 +88,21 @@ def apply_risk_controls(
     df: pd.DataFrame,
     params: RiskParams,
 ) -> tuple[list[Trade], pd.Series]:
-    """Process raw signals through risk controls and produce trades.
-
-    This is the main engine function. It walks through every bar sequentially,
-    managing position state, checking stop-loss/take-profit, and enforcing
-    the max drawdown kill-switch.
-
-    Fill-at-next-open rule:
-        A signal on bar N creates a pending order. The order fills at
-        bar N+1's OPEN price. This ensures the strategy never trades
-        on information it wouldn't have in live trading.
-
-    Args:
-        signals: pd.Series of BUY/SELL/HOLD from a Strategy.
-        df: OHLCV DataFrame aligned with signals.
-        params: RiskParams with all configurable thresholds.
-
-    Returns:
-        Tuple of:
-            - list[Trade]: completed round-trip trades
-            - pd.Series: equity curve (portfolio value at each bar)
-    """
-    # Compute ATR for position sizing and SL/TP
+    """Process raw signals through risk controls and produce net-of-cost trades."""
     atr_series = compute_atr(df, period=params.atr_period)
+
+    comm = params.commission_bps / 10_000.0
+    slip = params.slippage_bps / 10_000.0
 
     trades: list[Trade] = []
     equity_curve = pd.Series(np.nan, index=df.index, dtype=float)
 
-    # Portfolio state
     capital = params.initial_capital
-    position: Optional[dict] = None      # Active position (None = flat)
-    pending_order: Optional[Order] = None # Order waiting to fill
-    peak_equity = capital                 # For drawdown calculation
-    kill_switch_active = False            # True when max DD exceeded
+    position: Optional[dict] = None
+    pending_order: Optional[Order] = None
+    peak_equity = capital
+    kill_switch_active = False
+    cooldown_remaining = 0
 
     for i in range(len(df)):
         bar_time = df.index[i]
@@ -120,19 +112,24 @@ def apply_risk_controls(
         bar_close = df["close"].iloc[i]
         current_atr = atr_series.iloc[i] if not np.isnan(atr_series.iloc[i]) else None
 
-        # --- Step 1: Fill pending order at this bar's open ---
+        # --- Step 1: Fill pending order at this bar's open (with slippage) ---
         if pending_order is not None:
-            fill_price = bar_open
+            raw_fill = bar_open
+            action = "buy" if pending_order.side == "BUY" else "sell"
+            fill_price = _apply_slippage(raw_fill, action, slip)
 
             if current_atr is not None and current_atr > 0:
                 pos_size = atr_position_size(
                     capital, params.risk_per_trade, current_atr, params.atr_multiplier
                 )
             else:
-                # Fallback: risk 1% of capital at current price
                 pos_size = (capital * params.risk_per_trade) / fill_price if fill_price > 0 else 0
 
-            # Calculate SL/TP levels
+            # Leverage cap: notional <= max_leverage * capital
+            if fill_price > 0 and params.max_leverage > 0:
+                max_size = (params.max_leverage * capital) / fill_price
+                pos_size = min(pos_size, max_size)
+
             if params.use_pct:
                 if pending_order.side == "BUY":
                     sl = fill_price * (1 - params.stop_loss_pct)
@@ -149,6 +146,8 @@ def apply_risk_controls(
                     sl = fill_price + params.stop_loss_atr * atr_val
                     tp = fill_price - params.take_profit_atr * atr_val
 
+            entry_fee = pos_size * fill_price * comm
+
             position = {
                 "side": "LONG" if pending_order.side == "BUY" else "SHORT",
                 "entry_time": bar_time,
@@ -156,6 +155,7 @@ def apply_risk_controls(
                 "size": pos_size,
                 "stop_loss": sl,
                 "take_profit": tp,
+                "entry_fee": entry_fee,
             }
             pending_order = None
 
@@ -163,36 +163,35 @@ def apply_risk_controls(
         if position is not None:
             exit_price = None
             exit_reason = ""
+            hit_sl = hit_tp = False
 
             if position["side"] == "LONG":
-                # Stop-loss hit (price went below SL)
-                if bar_low <= position["stop_loss"]:
-                    exit_price = position["stop_loss"]
-                    exit_reason = "stop_loss"
-                # Take-profit hit (price went above TP)
-                elif bar_high >= position["take_profit"]:
-                    exit_price = position["take_profit"]
-                    exit_reason = "take_profit"
-            else:  # SHORT
-                # Stop-loss hit (price went above SL)
-                if bar_high >= position["stop_loss"]:
-                    exit_price = position["stop_loss"]
-                    exit_reason = "stop_loss"
-                # Take-profit hit (price went below TP)
-                elif bar_low <= position["take_profit"]:
-                    exit_price = position["take_profit"]
-                    exit_reason = "take_profit"
+                hit_sl = bar_low <= position["stop_loss"]
+                hit_tp = bar_high >= position["take_profit"]
+            else:
+                hit_sl = bar_high >= position["stop_loss"]
+                hit_tp = bar_low <= position["take_profit"]
+
+            if hit_sl and hit_tp:
+                # Ambiguous intrabar order; pessimistic = assume stop-loss first
+                if params.pessimistic_fills:
+                    exit_price, exit_reason = position["stop_loss"], "stop_loss"
+                else:
+                    exit_price, exit_reason = position["take_profit"], "take_profit"
+            elif hit_sl:
+                exit_price, exit_reason = position["stop_loss"], "stop_loss"
+            elif hit_tp:
+                exit_price, exit_reason = position["take_profit"], "take_profit"
 
             if exit_price is not None:
-                trade = _close_position(position, bar_time, exit_price, exit_reason)
+                trade = _close_position(position, bar_time, exit_price, exit_reason, comm, slip)
                 trades.append(trade)
                 capital += trade.pnl
                 position = None
 
-        # --- Step 3: Check max drawdown kill-switch ---
+        # --- Step 3: Max drawdown kill-switch ---
         current_equity = capital
         if position is not None:
-            # Mark-to-market: unrealized P&L
             if position["side"] == "LONG":
                 unrealized = (bar_close - position["entry_price"]) * position["size"]
             else:
@@ -202,38 +201,45 @@ def apply_risk_controls(
         peak_equity = max(peak_equity, current_equity)
         if peak_equity > 0:
             current_drawdown = (peak_equity - current_equity) / peak_equity
-            if current_drawdown >= params.max_drawdown_pct:
+            if not kill_switch_active and current_drawdown >= params.max_drawdown_pct:
                 kill_switch_active = True
-
-                # Force-close any open position
                 if position is not None:
-                    trade = _close_position(position, bar_time, bar_close, "kill_switch")
+                    trade = _close_position(position, bar_time, bar_close, "kill_switch", comm, slip)
                     trades.append(trade)
                     capital += trade.pnl
                     position = None
+                    current_equity = capital
+                if params.kill_switch_mode == "reset":
+                    cooldown_remaining = params.kill_switch_cooldown_bars
+
+        # Cooldown-based reset: resume trading after cooldown, restart DD clock
+        if kill_switch_active and params.kill_switch_mode == "reset":
+            if cooldown_remaining > 0:
+                cooldown_remaining -= 1
+            if cooldown_remaining <= 0:
+                kill_switch_active = False
+                peak_equity = current_equity
 
         equity_curve.iloc[i] = current_equity
 
-        # --- Step 4: Process new signal (generate pending order) ---
+        # --- Step 4: Process new signal (pending order fills next bar) ---
         signal = signals.iloc[i]
-
         if signal in ("BUY", "SELL") and not kill_switch_active:
-            # Close existing position if signal is opposite
             if position is not None:
                 opposite = (
                     (position["side"] == "LONG" and signal == "SELL") or
                     (position["side"] == "SHORT" and signal == "BUY")
                 )
                 if opposite:
-                    trade = _close_position(position, bar_time, bar_close, "signal")
+                    trade = _close_position(position, bar_time, bar_close, "signal", comm, slip)
                     trades.append(trade)
                     capital += trade.pnl
                     position = None
+                    # equity at this bar reflects the realized exit (fix stale-equity timing)
+                    equity_curve.iloc[i] = capital
                 else:
-                    # Same direction signal while in position -- ignore
                     continue
 
-            # Create pending order (fills at NEXT bar's open)
             pending_order = Order(
                 signal_time=bar_time,
                 side=signal,
@@ -244,7 +250,7 @@ def apply_risk_controls(
     if position is not None:
         last_bar = df.index[-1]
         last_close = df["close"].iloc[-1]
-        trade = _close_position(position, last_bar, last_close, "end_of_data")
+        trade = _close_position(position, last_bar, last_close, "end_of_data", comm, slip)
         trades.append(trade)
         capital += trade.pnl
         equity_curve.iloc[-1] = capital
@@ -257,40 +263,40 @@ def _close_position(
     exit_time: datetime,
     exit_price: float,
     exit_reason: str,
+    comm: float = 0.0,
+    slip: float = 0.0,
 ) -> Trade:
-    """Close an open position and create a Trade record.
-
-    Args:
-        position: Active position dict.
-        exit_time: Timestamp of the exit bar.
-        exit_price: Price at which the position is closed.
-        exit_reason: Why the position was closed.
-
-    Returns:
-        Completed Trade object with P&L calculated.
-    """
+    """Close a position, applying exit slippage + commission. PnL is net of costs."""
     entry_price = position["entry_price"]
     size = position["size"]
+    entry_fee = position.get("entry_fee", 0.0)
 
+    # Exit slippage works against us
     if position["side"] == "LONG":
-        pnl = (exit_price - entry_price) * size
-    else:  # SHORT
-        pnl = (entry_price - exit_price) * size
+        exit_fill = _apply_slippage(exit_price, "sell", slip)
+        gross_pnl = (exit_fill - entry_price) * size
+    else:
+        exit_fill = _apply_slippage(exit_price, "buy", slip)
+        gross_pnl = (entry_price - exit_fill) * size
 
-    pnl_pct = (exit_price - entry_price) / entry_price if entry_price != 0 else 0
-    if position["side"] == "SHORT":
-        pnl_pct = -pnl_pct
+    exit_fee = size * exit_fill * comm
+    total_fee = entry_fee + exit_fee
+
+    notional = entry_price * size
+    net_pnl_full = gross_pnl - total_fee
+    pnl_pct = (net_pnl_full / notional) if notional != 0 else 0.0
 
     return Trade(
         entry_time=position["entry_time"],
         exit_time=exit_time,
         side=position["side"],
         entry_price=entry_price,
-        exit_price=exit_price,
+        exit_price=exit_fill,
         position_size=size,
         stop_loss=position["stop_loss"],
         take_profit=position["take_profit"],
-        pnl=pnl,
+        pnl=net_pnl_full,
         pnl_pct=pnl_pct,
+        fee=total_fee,
         exit_reason=exit_reason,
     )
