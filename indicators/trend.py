@@ -66,6 +66,7 @@ def supertrend(
         pd.DataFrame with columns:
             - 'supertrend': the Supertrend line value
             - 'direction': 1 for uptrend (bullish), -1 for downtrend (bearish)
+        The first (atr_period - 1) warmup bars are NaN in both columns.
     """
     high = df["high"]
     low = df["low"]
@@ -84,52 +85,66 @@ def supertrend(
     basic_upper = hl2 + multiplier * atr
     basic_lower = hl2 - multiplier * atr
 
-    # Step 3: Final bands with carry-forward logic
+    # Step 3: Final bands with carry-forward logic.
+    # ATR is NaN during warmup, so the recursion must start at the first bar
+    # where ATR is valid. Seeding at bar 0 would carry NaN forward forever
+    # (every comparison against NaN is False).
     n = len(df)
-    final_upper = np.zeros(n)
-    final_lower = np.zeros(n)
-    supertrend_vals = np.zeros(n)
-    direction = np.zeros(n)
+    bu = basic_upper.to_numpy(dtype=float)
+    bl = basic_lower.to_numpy(dtype=float)
+    c = close.to_numpy(dtype=float)
+    mid = hl2.to_numpy(dtype=float)
 
-    final_upper[0] = basic_upper.iloc[0]
-    final_lower[0] = basic_lower.iloc[0]
-    supertrend_vals[0] = basic_upper.iloc[0]
-    direction[0] = -1  # Start bearish
+    final_upper = np.full(n, np.nan)
+    final_lower = np.full(n, np.nan)
+    supertrend_vals = np.full(n, np.nan)
+    direction = np.full(n, np.nan)  # NaN during warmup, then +1 / -1
 
-    for i in range(1, n):
-        # Final upper band: can only decrease (tighten) in an uptrend
-        if basic_upper.iloc[i] < final_upper[i - 1] or close.iloc[i - 1] > final_upper[i - 1]:
-            final_upper[i] = basic_upper.iloc[i]
+    valid = np.flatnonzero(~np.isnan(bu) & ~np.isnan(bl))
+    if valid.size == 0:
+        return pd.DataFrame(
+            {"supertrend": supertrend_vals, "direction": direction},
+            index=df.index,
+        )
+
+    start = valid[0]
+    final_upper[start] = bu[start]
+    final_lower[start] = bl[start]
+    # Initial direction: bullish if close is above the bar's midpoint.
+    if c[start] >= mid[start]:
+        direction[start] = 1
+        supertrend_vals[start] = final_lower[start]
+    else:
+        direction[start] = -1
+        supertrend_vals[start] = final_upper[start]
+
+    for i in range(start + 1, n):
+        # Final upper band: only moves down, unless price closed above it
+        if bu[i] < final_upper[i - 1] or c[i - 1] > final_upper[i - 1]:
+            final_upper[i] = bu[i]
         else:
             final_upper[i] = final_upper[i - 1]
 
-        # Final lower band: can only increase (tighten) in a downtrend
-        if basic_lower.iloc[i] > final_lower[i - 1] or close.iloc[i - 1] < final_lower[i - 1]:
-            final_lower[i] = basic_lower.iloc[i]
+        # Final lower band: only moves up, unless price closed below it
+        if bl[i] > final_lower[i - 1] or c[i - 1] < final_lower[i - 1]:
+            final_lower[i] = bl[i]
         else:
             final_lower[i] = final_lower[i - 1]
 
-        # Direction logic
-        if supertrend_vals[i - 1] == final_upper[i - 1]:
-            # Was bearish — check if price broke above upper band
-            if close.iloc[i] > final_upper[i]:
-                direction[i] = 1  # Flip to bullish
-                supertrend_vals[i] = final_lower[i]
-            else:
-                direction[i] = -1
-                supertrend_vals[i] = final_upper[i]
+        # Direction: track state explicitly (no float-equality checks)
+        if direction[i - 1] == -1:
+            # Bearish — flip if close breaks above the upper band
+            direction[i] = 1 if c[i] > final_upper[i] else -1
         else:
-            # Was bullish — check if price broke below lower band
-            if close.iloc[i] < final_lower[i]:
-                direction[i] = -1  # Flip to bearish
-                supertrend_vals[i] = final_upper[i]
-            else:
-                direction[i] = 1
-                supertrend_vals[i] = final_lower[i]
+            # Bullish — flip if close breaks below the lower band
+            direction[i] = -1 if c[i] < final_lower[i] else 1
 
+        supertrend_vals[i] = final_lower[i] if direction[i] == 1 else final_upper[i]
+
+    # direction stays float so warmup bars can be NaN (+1.0 / -1.0 afterwards)
     result = pd.DataFrame({
         "supertrend": supertrend_vals,
-        "direction": direction.astype(int),
+        "direction": direction,
     }, index=df.index)
 
     return result

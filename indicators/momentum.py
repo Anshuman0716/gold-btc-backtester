@@ -54,8 +54,9 @@ def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
     rs = avg_gain / avg_loss.replace(0, float("nan"))
     rsi_series = 100 - (100 / (1 + rs))
 
-    # When avg_loss is 0 (all gains), RSI = 100
-    rsi_series = rsi_series.fillna(100.0)
+    # When avg_loss is 0 (all gains), RSI = 100. Only that case is mapped;
+    # warmup NaNs stay NaN (NaN != 0 is True, so they are left alone).
+    rsi_series = rsi_series.where(avg_loss != 0, 100.0)
 
     return rsi_series
 
