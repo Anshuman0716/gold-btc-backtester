@@ -55,3 +55,12 @@ def test_indicators_have_no_lookahead(btc):
         full = f(btc)
         part = f(btc.iloc[:cut])
         np.testing.assert_allclose(full.iloc[:cut].values, part.values, equal_nan=True)
+
+
+def test_adx_finite_on_flat_series():
+    from indicators.trend import adx
+    flat = pd.DataFrame(
+        {"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0},
+        index=pd.date_range("2024-01-01", periods=60, freq="D"),
+    )
+    assert np.isfinite(adx(flat, 14)).all()

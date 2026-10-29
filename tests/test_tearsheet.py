@@ -43,3 +43,10 @@ def test_benchmark_pipeline_is_deterministic(btc):
         trades, eq = apply_risk_controls(sig, btc, RiskParams())
         return compute_tearsheet(trades, eq).total_return
     assert run() == run()
+
+
+def test_infinite_ratios_are_clamped_finite():
+    eq = pd.Series(np.linspace(100, 110, 20), index=pd.date_range("2024-01-01", periods=20))
+    ts = compute_tearsheet([], eq, initial_capital=100.0)
+    assert np.isfinite(ts.sortino_ratio)
+    assert np.isfinite(ts.profit_factor) and np.isfinite(ts.calmar_ratio)

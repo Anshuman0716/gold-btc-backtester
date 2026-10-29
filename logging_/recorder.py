@@ -23,8 +23,11 @@ INSERT INTO backtest_runs (
     run_id, timestamp, asset, interval, start_date, end_date,
     strategy_name, strategy_params,
     total_return, sharpe_ratio, sortino_ratio, calmar_ratio,
-    max_drawdown, win_rate, profit_factor, num_trades
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    max_drawdown, win_rate, profit_factor, num_trades,
+    initial_capital, risk_per_trade, stop_loss_atr, take_profit_atr,
+    max_drawdown_pct, commission_bps, slippage_bps, max_leverage,
+    data_fingerprint
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -36,6 +39,8 @@ def record_run(
     strategy_name: str,
     strategy_params: dict,
     tearsheet: TearsheetResult,
+    risk_params=None,
+    data_fingerprint: str = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> str:
     """Record a completed backtest run to the audit log.
@@ -60,6 +65,9 @@ def record_run(
     run_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
 
+    def _rp(attr):
+        return getattr(risk_params, attr, None) if risk_params is not None else None
+
     try:
         conn.execute(INSERT_RUN_SQL, (
             run_id,
@@ -78,6 +86,15 @@ def record_run(
             tearsheet.win_rate,
             tearsheet.profit_factor,
             tearsheet.num_trades,
+            _rp("initial_capital"),
+            _rp("risk_per_trade"),
+            _rp("stop_loss_atr"),
+            _rp("take_profit_atr"),
+            _rp("max_drawdown_pct"),
+            _rp("commission_bps"),
+            _rp("slippage_bps"),
+            _rp("max_leverage"),
+            data_fingerprint,
         ))
         conn.commit()
     finally:

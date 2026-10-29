@@ -12,6 +12,7 @@ Entry point:
 """
 
 import sys
+import hashlib
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -690,6 +691,9 @@ if run_backtest:
     tearsheet = compute_tearsheet(trades, equity_curve, initial_capital, asset, interval)
 
     # --- Record Run ---
+    data_fingerprint = hashlib.sha256(
+        pd.util.hash_pandas_object(df, index=True).values.tobytes()
+    ).hexdigest()
     run_id = record_run(
         asset=asset,
         interval=interval,
@@ -698,6 +702,8 @@ if run_backtest:
         strategy_name=strategy.name,
         strategy_params=strategy.get_params(),
         tearsheet=tearsheet,
+        risk_params=risk_params,
+        data_fingerprint=data_fingerprint,
     )
 
     # Store results in session state

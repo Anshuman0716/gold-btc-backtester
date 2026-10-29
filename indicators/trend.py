@@ -201,12 +201,15 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     smoothed_plus_dm = plus_dm.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
     smoothed_minus_dm = minus_dm.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
 
-    # Directional Indicators
-    plus_di = (smoothed_plus_dm / smoothed_tr) * 100
-    minus_di = (smoothed_minus_dm / smoothed_tr) * 100
+    # Directional Indicators (guard divide-by-zero on flat / zero-range markets)
+    safe_tr = smoothed_tr.replace(0, np.nan)
+    plus_di = (smoothed_plus_dm / safe_tr) * 100
+    minus_di = (smoothed_minus_dm / safe_tr) * 100
 
-    # DX and ADX
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    # DX and ADX; 0/0 (no directional movement) -> undefined, resolved to 0 below
+    di_sum = (plus_di + minus_di).replace(0, np.nan)
+    dx = (abs(plus_di - minus_di) / di_sum) * 100
     adx_series = dx.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
 
-    return adx_series
+    # Flat series / warm-up -> finite 0 trend strength rather than NaN
+    return adx_series.fillna(0.0)

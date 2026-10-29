@@ -14,6 +14,7 @@ Cache directory: ./cache/ (gitignored)
 """
 
 import os
+import time
 import hashlib
 from datetime import datetime
 from pathlib import Path
@@ -39,14 +40,17 @@ class ParquetCache:
         df = cache.get("btc_1h_2024")  # Returns DataFrame or None
     """
 
-    def __init__(self, cache_dir: str = "./cache") -> None:
+    def __init__(self, cache_dir: str = "./cache", ttl_seconds: Optional[float] = None) -> None:
         """Initialize the cache directory.
 
         Args:
             cache_dir: Path to the cache directory. Created if it doesn't exist.
+            ttl_seconds: If set, cached files older than this many seconds are
+                treated as a miss (and removed). None (default) = never expire.
         """
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.ttl_seconds = ttl_seconds
 
     def _key_to_path(self, key: str) -> Path:
         """Convert a cache key to a filesystem path.
@@ -68,6 +72,9 @@ class ParquetCache:
         """
         path = self._key_to_path(key)
         if path.exists():
+            if self.ttl_seconds is not None and (time.time() - path.stat().st_mtime) > self.ttl_seconds:
+                path.unlink(missing_ok=True)   # expired
+                return None
             try:
                 return pd.read_parquet(path)
             except Exception:
@@ -112,6 +119,7 @@ class CachedDataSource(DataSource):
         self,
         source: DataSource,
         cache_dir: str = "./cache",
+        ttl_seconds: Optional[float] = None,
     ) -> None:
         """Initialize with a wrapped DataSource and cache directory.
 
@@ -120,7 +128,7 @@ class CachedDataSource(DataSource):
             cache_dir: Path to the cache directory.
         """
         self._source = source
-        self._cache = ParquetCache(cache_dir)
+        self._cache = ParquetCache(cache_dir, ttl_seconds=ttl_seconds)
 
     def _build_cache_key(
         self,
@@ -140,6 +148,7 @@ class CachedDataSource(DataSource):
         interval: str,
         start: datetime,
         end: datetime,
+        force_refresh: bool = False,
     ) -> pd.DataFrame:
         """Fetch OHLCV data, using cache if available.
 
@@ -158,10 +167,11 @@ class CachedDataSource(DataSource):
         """
         key = self._build_cache_key(symbol, interval, start, end)
 
-        # Try cache first
-        cached_df = self._cache.get(key)
-        if cached_df is not None:
-            return cached_df
+        # Try cache first (unless a forced refresh was requested)
+        if not force_refresh:
+            cached_df = self._cache.get(key)
+            if cached_df is not None:
+                return cached_df
 
         # Cache miss — fetch from source
         df = self._source.fetch_ohlcv(symbol, interval, start, end)

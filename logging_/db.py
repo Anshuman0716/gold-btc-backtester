@@ -1,24 +1,17 @@
 """
-SQLite database schema and connection management.
+SQLite database schema, migration, and connection management.
 
-Single table: backtest_runs
-Stores every backtest run with full parameters and key metrics.
-Uses context manager for safe connection handling.
-
-Why SQLite:
-    - Zero deployment overhead (built into Python)
-    - Single-file database (easy to inspect, share, version)
-    - ACID compliant (no partial writes)
-    - Shows awareness of audit-trail patterns without overengineering
+Single table: backtest_runs. Stores every backtest run with its metrics AND the
+risk/cost parameters + a data fingerprint, so a run can be reproduced from its row.
+Older databases are upgraded in place via a lightweight ADD COLUMN migration.
 """
 
 import sqlite3
-from pathlib import Path
 
 # Default database path
 DEFAULT_DB_PATH = "backtest_log.db"
 
-# Schema: backtest_runs table
+# Core columns (present since v1).
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS backtest_runs (
     run_id          TEXT PRIMARY KEY,
@@ -40,33 +33,49 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
 );
 """
 
+# Reproducibility columns added in P1.6. Nullable so pre-existing rows and
+# legacy record_run() calls (no risk params) remain valid.
+EXTRA_COLUMNS: list[tuple[str, str]] = [
+    ("initial_capital", "REAL"),
+    ("risk_per_trade", "REAL"),
+    ("stop_loss_atr", "REAL"),
+    ("take_profit_atr", "REAL"),
+    ("max_drawdown_pct", "REAL"),
+    ("commission_bps", "REAL"),
+    ("slippage_bps", "REAL"),
+    ("max_leverage", "REAL"),
+    ("data_fingerprint", "TEXT"),
+]
+
 
 def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Get a SQLite connection with row factory enabled.
-
-    Args:
-        db_path: Path to the SQLite database file.
-
-    Returns:
-        sqlite3.Connection with Row factory for dict-like access.
-    """
+    """Get a SQLite connection with Row factory enabled."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add any missing reproducibility columns to an existing table."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(backtest_runs)").fetchall()}
+    for col, decl in EXTRA_COLUMNS:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE backtest_runs ADD COLUMN {col} {decl}")
+
+
 def init_db(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Initialize the database and create tables if they don't exist.
+    """Initialize the database, creating the table and upgrading old schemas.
 
-    Safe to call multiple times -- CREATE TABLE IF NOT EXISTS is idempotent.
-
-    Args:
-        db_path: Path to the SQLite database file.
-
-    Returns:
-        sqlite3.Connection ready for use.
+    Safe to call repeatedly: CREATE TABLE IF NOT EXISTS is idempotent and the
+    migration only adds columns that are missing.
     """
     conn = get_connection(db_path)
     conn.execute(CREATE_TABLE_SQL)
+    # Fresh DBs: ensure the extra columns exist too.
+    for col, decl in EXTRA_COLUMNS:
+        try:
+            conn.execute(f"ALTER TABLE backtest_runs ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass  # already present
     conn.commit()
     return conn

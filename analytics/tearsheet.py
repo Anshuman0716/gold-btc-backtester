@@ -74,6 +74,22 @@ def get_annualization_factor(asset: str, interval: str) -> float:
     return np.sqrt(bars)
 
 
+# Finite sentinel for otherwise-infinite ratios (no-downside Sortino, no-loss
+# profit factor). Keeps values DB-safe (REAL NOT NULL) and display-safe.
+_RATIO_CAP = 1e6
+
+
+def _finite(x: float, cap: float = _RATIO_CAP) -> float:
+    """Clamp NaN->0 and +/-inf (or overflow) to +/-cap."""
+    if x != x:            # NaN
+        return 0.0
+    if x > cap:
+        return cap
+    if x < -cap:
+        return -cap
+    return float(x)
+
+
 @dataclass
 class TearsheetResult:
     """Complete performance analytics for a backtest run.
@@ -148,30 +164,30 @@ def compute_tearsheet(
     if len(returns) < 2:
         return _empty_tearsheet(equity_curve, len(trades))
 
-    # --- Sharpe Ratio (annualized) ---
-    # Sharpe = (mean_return - rf_per_bar) / std_return * sqrt(bars_per_year)
+    # --- Sharpe / Sortino on ACTIVE return bars ---
+    # The strategy is flat (out of market) on many bars, producing exactly-zero
+    # equity returns. Including long runs of zeros deflates both the mean and the
+    # std and distorts risk-adjusted ratios, so we compute Sharpe/Sortino over
+    # *active* bars only (non-zero equity returns). Annualization is unchanged.
     bars_per_year = ann_factor ** 2  # Undo sqrt to get raw bars
     rf_per_bar = risk_free_rate / bars_per_year if bars_per_year > 0 else 0
 
-    mean_return = returns.mean()
-    std_return = returns.std()
+    active = returns[returns != 0.0]
+    if len(active) >= 2:
+        mean_return = active.mean()
+        std_return = active.std()
+        sharpe = (mean_return - rf_per_bar) / std_return * ann_factor if std_return > 0 else 0.0
 
-    if std_return > 0:
-        sharpe = (mean_return - rf_per_bar) / std_return * ann_factor
+        downside = active[active < rf_per_bar]
+        if len(downside) > 0:
+            downside_std = np.sqrt(((downside - rf_per_bar) ** 2).mean())
+            sortino = (mean_return - rf_per_bar) / downside_std * ann_factor if downside_std > 0 else 0.0
+        else:
+            # No losing active bars -> undefined; capped sentinel, never inf
+            sortino = 0.0 if mean_return <= rf_per_bar else _RATIO_CAP
     else:
         sharpe = 0.0
-
-    # --- Sortino Ratio (annualized, downside deviation only) ---
-    downside_returns = returns[returns < rf_per_bar]
-    if len(downside_returns) > 0:
-        downside_std = np.sqrt(((downside_returns - rf_per_bar) ** 2).mean())
-        if downside_std > 0:
-            sortino = (mean_return - rf_per_bar) / downside_std * ann_factor
-        else:
-            sortino = 0.0
-    else:
-        # No losing bars -- infinite Sortino, cap at 0
-        sortino = 0.0 if mean_return <= rf_per_bar else float("inf")
+        sortino = 0.0
 
     # --- Maximum Drawdown ---
     peak = eq.cummax()
@@ -199,7 +215,7 @@ def compute_tearsheet(
         # Profit Factor (gross profit / gross loss)
         gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
         gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else (_RATIO_CAP if gross_profit > 0 else 0.0)
 
         # Average Trade Return (%)
         trade_returns = [t.pnl_pct for t in trades]
@@ -212,13 +228,13 @@ def compute_tearsheet(
     return TearsheetResult(
         equity_curve=equity_curve,
         total_return=total_return,
-        sharpe_ratio=sharpe,
-        sortino_ratio=sortino,
-        calmar_ratio=calmar,
+        sharpe_ratio=_finite(sharpe),
+        sortino_ratio=_finite(sortino),
+        calmar_ratio=_finite(calmar),
         max_drawdown=max_dd,
         max_drawdown_duration=max_dd_duration,
         win_rate=win_rate,
-        profit_factor=profit_factor,
+        profit_factor=_finite(profit_factor),
         avg_trade_return=avg_trade_return,
         num_trades=num_trades,
     )

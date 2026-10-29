@@ -79,3 +79,27 @@ def test_cache_hits_source_once(tmp_path, btc):
     b = src.fetch_ohlcv("BTC-USD", "1d", datetime(2024, 1, 1), datetime(2024, 2, 1))
     assert len(calls) == 1
     pd.testing.assert_frame_equal(a, b, check_freq=False)
+
+
+def test_cache_ttl_expiry(tmp_path, btc):
+    import os, time
+    from data.cache import ParquetCache
+    c = ParquetCache(str(tmp_path), ttl_seconds=5)
+    c.put("k", btc.head(5))
+    path = c._key_to_path("k")
+    os.utime(path, (time.time() - 10, time.time() - 10))  # age it past the TTL
+    assert c.get("k") is None
+
+
+def test_force_refresh_bypasses_cache(tmp_path, btc):
+    calls = []
+
+    class Counting(YFinanceSource):
+        def fetch_ohlcv(self, *a, **k):
+            calls.append(1)
+            return btc.head(10)
+
+    src = CachedDataSource(Counting(), cache_dir=str(tmp_path))
+    src.fetch_ohlcv("BTC-USD", "1d", datetime(2024, 1, 1), datetime(2024, 2, 1))
+    src.fetch_ohlcv("BTC-USD", "1d", datetime(2024, 1, 1), datetime(2024, 2, 1), force_refresh=True)
+    assert len(calls) == 2
