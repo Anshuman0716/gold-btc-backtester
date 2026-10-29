@@ -114,7 +114,7 @@ python -m checkpoints.checkpoint_phase5   # Logging
 
 - **Phase 0 — Credibility fixes:** fix Supertrend seeding, RSI warm-up, add a `LICENSE` file, replace static sample numbers with a reproducible fixed-date backtest _(done)_.
 - **Phase 1 — Honest backtester:** transaction-cost model, active-bar Sharpe/Sortino, resettable kill-switch, leverage/cash guard, richer audit log (risk + cost params) _(done)_.
-- **Phase 2 — Engineering hardening:** offline `pytest` suite (47 tests, no network), GitHub Actions CI (tests + benchmark-reproducibility check), pinned dependencies, inclusive end-date handling _(done)_.
+- **Phase 2 — Engineering hardening:** offline `pytest` suite (58 tests, no network), GitHub Actions CI (tests + benchmark-reproducibility check), pinned dependencies, inclusive end-date handling _(done)_.
 - **Phase 3 — Extensibility:** Donchian Breakout, Time-Series Momentum, and Bollinger/RSI Mean-Reversion strategies _(done)_; walk-forward / out-of-sample evaluation _(next)_.
 
 ## Sample Results
